@@ -32,7 +32,7 @@ class session
 
     void do_resolve()
     {
-
+      //cout<< "do_resolve()" << endl;
       string port, ip;
 
       port = to_string(ntohs(*((uint16_t*)&request_data_[2])));
@@ -50,7 +50,6 @@ class session
       tcp::resolver::query query_(ip, port);
       tcp::resolver::iterator it = resolver_.resolve(query_);
       this->request_endpoint_ = it->endpoint();
-
     }
 
     void show_SOCKS_Info(string reply)
@@ -74,8 +73,8 @@ class session
           DOMAIN_NAME += to_string((uint8_t)request_data_[i]);
       }
 
-      std::cout << "<USERID>:" << USERID << std::endl;
-      std::cout << "<DOMAIN_NAME>:" << DOMAIN_NAME << std::endl;
+      // std::cout << "<USERID>:" << USERID << std::endl;
+      // std::cout << "<DOMAIN_NAME>:" << DOMAIN_NAME << std::endl;
       std::cout << "<D_IP>: " << request_endpoint_.address().to_string() << std::endl;
       std::cout << "<D_PORT>: " << to_string(request_endpoint_.port()) << std::endl;
       std::cout << "<Command>: " << ( (request_data_[1] == 1)? "CONNECT" : "BIND" ) << std::endl;
@@ -84,10 +83,26 @@ class session
 
     }
 
+    void do_fail_reply() 
+    {
+        show_SOCKS_Info("Reject");
+        do_write_socks4_reply(91, client_socket_.local_endpoint());
+        close_socket();
+    }
+
+    int do_bind() 
+    {
+        auto self(shared_from_this());
+        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 0));
+        do_write_socks4_reply(90, acceptor.local_endpoint());
+        acceptor.accept(server_socket_);
+        do_write_socks4_reply(90, acceptor.local_endpoint());
+        return server_socket_.native_handle();
+    }
+
     int do_connect_DST()
     {
       server_socket_.connect(request_endpoint_);
-      //cout<< "do_connect_DST" << std::endl;
       return server_socket_.native_handle();
     }
 
@@ -191,12 +206,12 @@ class session
             if (!ec)
             {
                 do_resolve();
-
+                //cout << to_string((uint8_t)request_data_[1]) << std::endl;
                 if ( request_data_[1] == 1 ) 
                 {
                     if( do_connect_DST() < 0 )
                     {
-
+                      do_fail_reply();
                     }
                     else 
                     {
@@ -206,7 +221,15 @@ class session
                 }
                 else if ( request_data_[1] == 2)
                 {
-
+                  //cout << "request_data_[1] == 2" << endl;
+                    if( do_bind() < 0 )
+                    {
+                      do_fail_reply();
+                    }
+                    else 
+                    {
+                      show_SOCKS_Info("Accept");
+                    }
                 }
 
                 server_socket_read();
