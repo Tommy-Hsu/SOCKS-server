@@ -36,6 +36,7 @@ class session
       string port, ip;
 
       port = to_string(ntohs(*((uint16_t*)&request_data_[2])));
+
       if (request_data_[4] == 0 && request_data_[5] == 0 && request_data_[6] == 0)
           ip = string(&request_data_[9]);
       else
@@ -59,8 +60,8 @@ class session
       std::cout << "" << std::endl;
       std::cout << "<S_IP>: " << client_socket_.remote_endpoint().address().to_string() << std::endl;
       std::cout << "<S_PORT>: " <<  to_string(client_socket_.remote_endpoint().port()) << std::endl;
-      std::cout << "<VN>:" << to_string((uint8_t)request_data_[0]) << std::endl;
-      std::cout << "<CD>:" << to_string((uint8_t)request_data_[1]) << std::endl;
+      // std::cout << "<VN>:" << to_string((uint8_t)request_data_[0]) << std::endl;
+      // std::cout << "<CD>:" << to_string((uint8_t)request_data_[1]) << std::endl;
 
       int i;
       for (i = 8; request_data_[i] != '\0'; i++)
@@ -83,20 +84,17 @@ class session
 
     }
 
-    void do_fail_reply() 
-    {
-        show_SOCKS_Info("Reject");
-        do_write_socks4_reply(91, client_socket_.local_endpoint());
-        close_socket();
-    }
-
     int do_bind() 
     {
         auto self(shared_from_this());
-        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 0));
-        do_write_socks4_reply(90, acceptor.local_endpoint());
-        acceptor.accept(server_socket_);
-        do_write_socks4_reply(90, acceptor.local_endpoint());
+        // 建立另一個 port 給 datastream
+        // 別忘了 bind operation 也有跑 do_resolve() 與 do_connect()，因此當然 ftp client 與 socks server 之 datastream 是可以連上的
+        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 0)); // 隨機分配 ip 與 port， 0 的用意就是尋找可行的
+        do_write_socks4_reply(90, acceptor.local_endpoint() , 2); // 給 ftp server , socks server 創建用來 transfer data 的 port \，請 ftp client 自行告知 ftp server
+        //中間 ftp client 透過 connect mode 的通道，告訴 ftp server 如何連進 socks server 哪個 port
+        acceptor.accept(server_socket_); // acceptor accept 把 server_socket 抓來，當有其他 request 進來 socks server ，就是 server_socket_ 去服務了，
+        //注意 此 server_socket_ 已經是 datastream 的 server_socket_ 了
+        do_write_socks4_reply(90, acceptor.local_endpoint(), 2); //雖然 reply 內容相同，但 ftp client 知道 reply 2nd 的意思
         return server_socket_.native_handle();
     }
 
@@ -106,7 +104,7 @@ class session
       return server_socket_.native_handle();
     }
 
-    void do_write_socks4_reply(int reply, tcp::endpoint endpoint) 
+    void do_write_socks4_reply(int reply, tcp::endpoint endpoint, int to_who) 
     {
         unsigned short port = endpoint.port();
         unsigned int ip = endpoint.address().to_v4().to_ulong();
@@ -119,6 +117,8 @@ class session
         packet[5] = ip >> 16 & 0xFF;
         packet[6] = ip >> 8 & 0xFF;
         packet[7] = ip & 0xFF;
+
+        cout << "Reply to " << ((to_who == 1)?"CONNECT | ":"BIND | ") << packet[0] << " | " << reply << " | " << port << " | " << ip << endl;
 
         boost::asio::write(client_socket_, boost::asio::buffer(packet, 8));
     }
@@ -205,18 +205,24 @@ class session
           {
             if (!ec)
             {
+                if (request_data_[0] != 4)  //之後不是 socks4 request 都擋掉
+                  return;
+
                 do_resolve();
                 //cout << to_string((uint8_t)request_data_[1]) << std::endl;
                 if ( request_data_[1] == 1 ) 
                 {
                     if( do_connect_DST() < 0 )
                     {
-                      do_fail_reply();
+                      show_SOCKS_Info("Reject");
+                      do_write_socks4_reply(91, client_socket_.local_endpoint(), request_data_[1]);
+                      close_socket();
+                      return;
                     }
                     else 
                     {
                       show_SOCKS_Info("Accept");
-                      do_write_socks4_reply(90, client_socket_.local_endpoint());
+                      do_write_socks4_reply(90, client_socket_.local_endpoint(), request_data_[1]);
                     }
                 }
                 else if ( request_data_[1] == 2)
@@ -224,7 +230,10 @@ class session
                   //cout << "request_data_[1] == 2" << endl;
                     if( do_bind() < 0 )
                     {
-                      do_fail_reply();
+                      show_SOCKS_Info("Reject");
+                      do_write_socks4_reply(91, client_socket_.local_endpoint(), request_data_[1]);
+                      close_socket();
+                      return;
                     }
                     else 
                     {
