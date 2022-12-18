@@ -3,8 +3,11 @@
 #include <memory>
 #include <utility>
 #include <sys/wait.h>
+#include <fstream>
+#include <vector>
 #include <boost/asio.hpp>
 #include <boost/asio/io_context.hpp>
+#include <boost/algorithm/string.hpp>
 
 
 using boost::asio::ip::tcp;
@@ -53,6 +56,55 @@ class session
       this->request_endpoint_ = it->endpoint();
     }
 
+    bool pass_firewall()
+    {
+      ifstream socks_conf("./socks.conf");
+      if(socks_conf)
+      {
+        string permit, op, ip, ip_part[4];
+        while (socks_conf >> permit >> op >> ip)
+        {
+            if ( ((op == "c") && (request_data_[1] != 1)) || ((op == "b") && (request_data_[1] != 2)) )
+              continue;
+            cout << permit << " " << op << " " << ip << endl; 
+            for (int i = 0; i < 4; i++)
+            {
+                auto pos = ip.find_first_of('.');
+                if (pos != string::npos)
+                {
+                    ip_part[i] = ip.substr(0, pos);
+                    ip.erase(0, pos + 1);
+                }
+                else
+                {
+                    ip_part[i] = ip;
+                }
+            }
+            string tmp = client_socket_.remote_endpoint().address().to_string();
+            vector<string> src;
+            boost::split(src, tmp, boost::is_any_of("."),boost::token_compress_on);
+            if ((ip_part[0] == "*" || ip_part[0] == src[0]) &&
+                (ip_part[1] == "*" || ip_part[1] == src[1]) &&
+                (ip_part[2] == "*" || ip_part[2] == src[2]) &&
+                (ip_part[3] == "*" || ip_part[3] == src[3] ))
+            {   
+                socks_conf.close();
+                cout << " pass_firewall " << endl;
+                return true;
+            }
+        }
+
+        socks_conf.close();
+        cout << " fail_firewoall " << endl;
+        return false;
+      }
+      else
+      {
+        std::cout << " socks.conf isn't exited " << std::endl;
+        return false;
+      }
+    }
+
     void show_SOCKS_Info(string reply)
     {
       string USERID, DOMAIN_NAME;
@@ -88,12 +140,12 @@ class session
     {
         auto self(shared_from_this());
         // 建立另一個 port 給 datastream
-        // 別忘了 bind operation 也有跑 do_resolve() 與 do_connect()，因此當然 ftp client 與 socks server 之 datastream 是可以連上的
-        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 0)); // 隨機分配 ip 與 port， 0 的用意就是尋找可行的
+        // 別忘了 bind operation 也有跑 do_resolve() ，因此當然 ftp client 與 socks server 之 datastream 是可以連上的
+        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 0)); // endpoint 是創建一個 socket，而 acceptor 就是把 socket 開啟 accept 模式，隨機分配 ip 與 port， 0 的用意就是尋找可行的
         do_write_socks4_reply(90, acceptor.local_endpoint() , 2); // 給 ftp server , socks server 創建用來 transfer data 的 port \，請 ftp client 自行告知 ftp server
         //中間 ftp client 透過 connect mode 的通道，告訴 ftp server 如何連進 socks server 哪個 port
+        //tcp::socket socket_(io_context);
         acceptor.accept(server_socket_); // acceptor accept 把 server_socket 抓來，當有其他 request 進來 socks server ，就是 server_socket_ 去服務了，
-        //注意 此 server_socket_ 已經是 datastream 的 server_socket_ 了
         do_write_socks4_reply(90, acceptor.local_endpoint(), 2); //雖然 reply 內容相同，但 ftp client 知道 reply 2nd 的意思
         return server_socket_.native_handle();
     }
@@ -118,7 +170,7 @@ class session
         packet[6] = ip >> 8 & 0xFF;
         packet[7] = ip & 0xFF;
 
-        cout << "Reply to " << ((to_who == 1)?"CONNECT | ":"BIND | ") << packet[0] << " | " << reply << " | " << port << " | " << ip << endl;
+        cout << "Reply to " << ((to_who == 1)?"CONNECT: ":"BIND: ") << to_string(packet[0]) << " | " << reply << " | " << port << " | " << endpoint.address() << endl;
 
         boost::asio::write(client_socket_, boost::asio::buffer(packet, 8));
     }
@@ -205,10 +257,16 @@ class session
           {
             if (!ec)
             {
-                if (request_data_[0] != 4)  //之後不是 socks4 request 都擋掉
+                if(request_data_[0] != 4)
                   return;
-
                 do_resolve();
+                if(!pass_firewall())
+                {
+                  show_SOCKS_Info("Reject");
+                  do_write_socks4_reply(91, client_socket_.local_endpoint(), request_data_[1]);
+                  close_socket();
+                   return;
+                }
                 //cout << to_string((uint8_t)request_data_[1]) << std::endl;
                 if ( request_data_[1] == 1 ) 
                 {
