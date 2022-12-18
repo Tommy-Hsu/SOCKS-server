@@ -33,3 +33,6 @@
 
 # git
 .git
+
+# conf
+.conf
