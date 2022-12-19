@@ -66,7 +66,7 @@ class session
         {
             if ( ((op == "c") && (request_data_[1] != 1)) || ((op == "b") && (request_data_[1] != 2)) )
               continue;
-            cout << permit << " " << op << " " << ip << endl; 
+            //cout << permit << " " << op << " " << ip << endl; 
             for (int i = 0; i < 4; i++)
             {
                 auto pos = ip.find_first_of('.');
@@ -89,18 +89,18 @@ class session
                 (ip_part[3] == "*" || ip_part[3] == src[3] ))
             {   
                 socks_conf.close();
-                cout << " pass_firewall " << endl;
+                //cout << " pass_firewall " << endl;
                 return true;
             }
         }
 
         socks_conf.close();
-        cout << " fail_firewoall " << endl;
+        //cout << " fail_firewoall " << endl;
         return false;
       }
       else
       {
-        std::cout << " socks.conf isn't exited " << std::endl;
+        //std::cout << " socks.conf isn't exited " << std::endl;
         return false;
       }
     }
@@ -170,7 +170,7 @@ class session
         packet[6] = ip >> 8 & 0xFF;
         packet[7] = ip & 0xFF;
 
-        cout << "Reply to " << ((to_who == 1)?"CONNECT: ":"BIND: ") << to_string(packet[0]) << " | " << reply << " | " << port << " | " << endpoint.address() << endl;
+        //cout << "Reply to " << ((to_who == 1)?"CONNECT: ":"BIND: ") << to_string(packet[0]) << " | " << reply << " | " << port << " | " << endpoint.address().to_string() << endl;
 
         boost::asio::write(client_socket_, boost::asio::buffer(packet, 8));
     }
